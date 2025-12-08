@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>SmartCycle Pro v5.1</title>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; font-family: 'Courier New', monospace; }
+        #canvas-layer { position: absolute; width: 100%; height: 100%; object-fit: cover; }
+        .ui-container { position: absolute; bottom: 20px; left: 0; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 10px; z-index: 10; pointer-events: none; }
+        .btn-group { display: flex; gap: 15px; pointer-events: auto; }
+        button { background: rgba(0, 100, 0, 0.8); border: 2px solid #0f0; color: #fff; padding: 10px 20px; font-size: 16px; border-radius: 8px; font-weight: bold; }
+        button:disabled { border-color: #555; color: #888; background: rgba(50,50,50,0.8); }
+        button.recording { background: #f00; border-color: #fff; animation: pulse 1s infinite; }
+        .status { color: #0f0; font-size: 12px; background: rgba(0,0,0,0.5); padding: 4px; }
+        /* 新增调试窗口 */
+        #debug-log { position: absolute; top: 0; left: 0; width: 100%; color: yellow; font-size: 10px; background: rgba(0,0,0,0.5); padding: 5px; z-index: 20; pointer-events: none; word-wrap: break-word; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+    <!-- 调试信息 -->
+    <div id="debug-log">Debug: 等待数据...</div>
+
+    <video id="video-source" playsinline autoplay muted style="display:none;"></video>
+    <canvas id="canvas-layer"></canvas>
+
+    <div class="ui-container">
+        <div id="status-text" class="status">等待连接...</div>
+        <div class="btn-group">
+            <button id="btn-connect">📡 连接蓝牙</button>
+            <button id="btn-cam">📷 开启相机</button>
+            <button id="btn-rec" disabled>⏺ 录制</button>
+        </div>
+    </div>
+
+<script>
+    const SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+    const CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+
+    let bleDevice, bleServer;
+    let data = { ax:0, ay:0, az:0, speed:0, vol:0, btn:0, time:0 }; 
+    let isRecording = false;
+    let mediaRecorder;
+    let recordedChunks = [];
+    let csvContent = "Time_ms,Ax,Ay,Az,Speed_kmh,Voltage_V,Button_Marker\n";
+
+    const video = document.getElementById('video-source');
+    const canvas = document.getElementById('canvas-layer');
+    const ctx = canvas.getContext('2d');
+    const statusDiv = document.getElementById('status-text');
+    const debugDiv = document.getElementById('debug-log'); // 获取调试框
+
+    document.getElementById('btn-connect').onclick = async () => {
+        try {
+            statusDiv.innerText = "搜索中...";
+            bleDevice = await navigator.bluetooth.requestDevice({
+                filters: [{ namePrefix: "SmartCycle" }],
+                optionalServices: [SERVICE_UUID]
+            });
+            bleDevice.addEventListener('gattserverdisconnected', () => {
+                statusDiv.innerText = "⚠️ 断开";
+                document.getElementById('btn-connect').style.display = 'block';
+            });
+            bleServer = await bleDevice.gatt.connect();
+            const service = await bleServer.getPrimaryService(SERVICE_UUID);
+            const char = await service.getCharacteristic(CHAR_UUID);
+            await char.startNotifications();
+            char.addEventListener('characteristicvaluechanged', handleData);
+            statusDiv.innerText = "✅ 在线";
+            document.getElementById('btn-connect').style.display = 'none';
+        } catch (e) { alert("连接失败: " + e); }
+    };
+
+    function handleData(event) {
+        const val = new TextDecoder().decode(event.target.value);
+        
+        // --- 调试核心 ---
+        // 这一行会把收到的原始数据直接显示在屏幕顶部
+        debugDiv.innerText = "RAW: " + val; 
+        console.log(val); // 同时也打印到控制台
+        // ---------------
+
+        // 尝试解析: 期望格式 "Time,Ax,Ay,Az,Speed,Vol,Btn"
+        const parts = val.split(',');
+        if(parts.length >= 7) {
+            data.time = parts[0];
+            data.ax = parseFloat(parts[1]);
+            data.ay = parseFloat(parts[2]);
+            data.az = parseFloat(parts[3]);
+            data.speed = parseFloat(parts[4]);
+            data.vol = parseFloat(parts[5]);
+            data.btn = parseInt(parts[6]);
+
+            if(isRecording) {
+                csvContent += `${data.time},${data.ax},${data.ay},${data.az},${data.speed},${data.vol},${data.btn}\n`;
+            }
+        }
+    }
+
+    document.getElementById('btn-cam').onclick = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: "environment", width: {ideal: 1280}, height: {ideal: 720} } 
+            });
+            video.srcObject = stream;
+            video.play();
+            loopDraw();
+            document.getElementById('btn-cam').style.display = 'none';
+            document.getElementById('btn-rec').disabled = false;
+        } catch (e) { alert("相机失败: " + e); }
+    };
+
+    function loopDraw() {
+        if (canvas.width !== video.videoWidth) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+        }
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        // 仪表盘
+        ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+        ctx.fillRect(10, canvas.height - 150, 300, 140);
+
+        ctx.fillStyle = "#0f0";
+        ctx.font = "bold 50px Courier New";
+        ctx.fillText(data.speed.toFixed(1), 30, canvas.height - 80);
+        ctx.font = "20px Arial";
+        ctx.fillStyle = "#aaa";
+        ctx.fillText("KM/H", 160, canvas.height - 80);
+        
+        ctx.font = "16px Arial";
+        ctx.fillStyle = "#fff";
+        ctx.fillText(`⚡ ${data.vol.toFixed(2)} V`, 30, canvas.height - 40);
+        ctx.fillText(`G: ${data.ax.toFixed(2)}`, 160, canvas.height - 40);
+
+        if (data.btn === 1) {
+            ctx.fillStyle = "red";
+            ctx.fillRect(canvas.width - 50, 20, 30, 30);
+        }
+        requestAnimationFrame(loopDraw);
+    }
+
+    document.getElementById('btn-rec').onclick = () => {
+        if (!isRecording) {
+            let stream = canvas.captureStream(30);
+            mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+            recordedChunks = [];
+            csvContent = "Time_ms,Ax,Ay,Az,Speed_kmh,Voltage_V,Button_Marker\n";
+            mediaRecorder.ondataavailable = e => { if(e.data.size > 0) recordedChunks.push(e.data); };
+            mediaRecorder.onstop = saveFiles;
+            mediaRecorder.start();
+            isRecording = true;
+            document.getElementById('btn-rec').innerText = "⏹ 停止";
+            document.getElementById('btn-rec').classList.add('recording');
+        } else {
+            mediaRecorder.stop();
+            isRecording = false;
+            document.getElementById('btn-rec').innerText = "⏺ 录制";
+            document.getElementById('btn-rec').classList.remove('recording');
+        }
+    };
+
+    function saveFiles() {
+        const timeStr = new Date().toISOString().slice(11,19).replace(/:/g,"-");
+        const blobVid = new Blob(recordedChunks, { type: 'video/webm' });
+        const urlVid = URL.createObjectURL(blobVid);
+        const aVid = document.createElement('a');
+        aVid.href = urlVid; aVid.download = `cycle_${timeStr}.webm`; aVid.click();
+
+        const blobCsv = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const urlCsv = URL.createObjectURL(blobCsv);
+        const aCsv = document.createElement('a');
+        aCsv.href = urlCsv; aCsv.download = `cycle_${timeStr}.csv`; aCsv.click();
+    }
+</script>
+</body>
+</html>
