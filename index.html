@@ -3,30 +3,33 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>SmartCycle Low-Res Recorder</title>
+    <title>SmartCycle Recorder V6.6</title>
     <style>
         body { margin: 0; background: #000; overflow: hidden; font-family: 'Courier New', monospace; }
         #canvas-layer { position: absolute; width: 100%; height: 100%; object-fit: cover; }
-        .ui-container { position: absolute; bottom: 20px; left: 0; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 10px; z-index: 10; pointer-events: none; }
-        .btn-group { display: flex; gap: 15px; pointer-events: auto; }
-        button { background: rgba(0, 100, 0, 0.8); border: 2px solid #0f0; color: #fff; padding: 10px 20px; font-size: 16px; border-radius: 8px; font-weight: bold; }
-        button:disabled { border-color: #555; color: #888; background: rgba(50,50,50,0.8); }
+        
+        /* 底部按钮区 */
+        .ui-container { position: absolute; bottom: 30px; left: 0; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 10px; z-index: 10; pointer-events: none; }
+        .btn-group { display: flex; gap: 20px; pointer-events: auto; }
+        
+        button { background: rgba(0, 0, 0, 0.6); border: 2px solid #0f0; color: #fff; padding: 15px 30px; font-size: 18px; border-radius: 50px; font-weight: bold; backdrop-filter: blur(5px); }
+        button:disabled { border-color: #555; color: #888; }
         button.recording { background: #f00; border-color: #fff; animation: pulse 1s infinite; }
-        .status { color: #0f0; font-size: 12px; background: rgba(0,0,0,0.5); padding: 4px; }
-        #debug-log { position: absolute; top: 0; left: 0; color: #555; font-size: 10px; padding: 5px; z-index: 20; }
+        
+        .status { color: #0f0; font-size: 12px; text-shadow: 1px 1px 2px black; }
+        
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
     </style>
 </head>
 <body>
-    <div id="debug-log">Mode: Low Quality (480p)</div>
     <video id="video-source" playsinline autoplay muted style="display:none;"></video>
     <canvas id="canvas-layer"></canvas>
 
     <div class="ui-container">
-        <div id="status-text" class="status">等待GPS...</div>
+        <div id="status-text" class="status">等待GPS定位...</div>
         <div class="btn-group">
-            <button id="btn-connect">📡 连蓝牙</button>
-            <button id="btn-cam">📷 开相机</button>
+            <button id="btn-connect">📡 连接</button>
+            <button id="btn-cam">📷 相机</button>
             <button id="btn-rec" disabled>⏺ 录制</button>
         </div>
     </div>
@@ -37,7 +40,6 @@
 
     let bleDevice, bleServer;
     let latestFrame = { time:0, speed:0, gps:0, btn:0 }; 
-    
     let gpsSpeed = 0.0; 
     let gpsAcc = 0;
     let isRecording = false;
@@ -70,6 +72,7 @@
             });
             bleDevice.addEventListener('gattserverdisconnected', () => {
                 document.getElementById('btn-connect').style.display = 'block';
+                statusDiv.innerText = "⚠️ 蓝牙断开";
             });
             bleServer = await bleDevice.gatt.connect();
             const service = await bleServer.getPrimaryService(SERVICE_UUID);
@@ -77,6 +80,7 @@
             await char.startNotifications();
             char.addEventListener('characteristicvaluechanged', handleData);
             document.getElementById('btn-connect').style.display = 'none';
+            statusDiv.innerText = "✅ 已连接";
         } catch (e) { alert("Err: " + e); }
     };
 
@@ -100,17 +104,11 @@
         }
     }
 
-    // --- 【修改点1】相机降级 ---
+    // 相机 (低画质模式)
     document.getElementById('btn-cam').onclick = async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { 
-                    facingMode: "environment", 
-                    // 强制请求 VGA 分辨率 (640x480)
-                    // 这能大幅降低手机发热和电量消耗
-                    width: { ideal: 640 }, 
-                    height: { ideal: 480 } 
-                } 
+                video: { facingMode: "environment", width: { ideal: 640 }, height: { ideal: 480 } } 
             });
             video.srcObject = stream;
             video.play();
@@ -120,6 +118,7 @@
         } catch (e) { alert("相机失败: " + e); }
     };
 
+    // --- UI 渲染 (关键修改) ---
     function loopDraw() {
         if (canvas.width !== video.videoWidth) {
             canvas.width = video.videoWidth;
@@ -127,46 +126,47 @@
         }
         ctx.drawImage(video, 0, 0);
 
-        // UI 渲染 (保持不变)
-        ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-        ctx.fillRect(0, canvas.height - 100, canvas.width, 100);
+        // --- 顶部 HUD 栏 ---
+        // 黑色半透明背景 (顶部)
+        ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+        ctx.fillRect(0, 0, canvas.width, 80);
 
-        ctx.fillStyle = "yellow";
-        ctx.font = "bold 40px Courier New";
+        // 1. 左上角：时间码 (黄色)
         ctx.textAlign = "left";
-        ctx.fillText(`T: ${latestFrame.time}`, 20, canvas.height - 40);
-        ctx.font = "14px Arial";
+        ctx.fillStyle = "yellow";
+        // 字体改小一点，适应手机
+        ctx.font = "bold 24px Courier New"; 
+        ctx.fillText(`T: ${latestFrame.time}`, 20, 45);
+        
         ctx.fillStyle = "#aaa";
-        ctx.fillText("SYNC TIME CODE", 20, canvas.height - 20);
+        ctx.font = "12px Arial";
+        ctx.fillText("SYNC TIME", 20, 65);
 
-        ctx.fillStyle = "#0f0";
+        // 2. 右上角：GPS 速度 (绿色)
         ctx.textAlign = "right";
-        ctx.font = "bold 50px Arial";
-        ctx.fillText(gpsSpeed.toFixed(1), canvas.width - 20, canvas.height - 40);
-        ctx.font = "14px Arial";
+        ctx.fillStyle = "#0f0";
+        ctx.font = "bold 36px Arial"; 
+        ctx.fillText(gpsSpeed.toFixed(1), canvas.width - 20, 45);
+        
         ctx.fillStyle = "#aaa";
-        ctx.fillText("GPS KM/H", canvas.width - 20, canvas.height - 20);
+        ctx.font = "12px Arial";
+        ctx.fillText("GPS KM/H", canvas.width - 20, 65);
 
+        // 3. 事件标记 (全屏红框闪烁)
         if (latestFrame.btn === 1) {
-            ctx.fillStyle = "red";
-            ctx.fillRect(0, 0, canvas.width, 20);
-            ctx.fillRect(0, canvas.height-20, canvas.width, 20);
+            ctx.lineWidth = 10;
+            ctx.strokeStyle = "rgba(255, 0, 0, 0.8)";
+            ctx.strokeRect(0, 0, canvas.width, canvas.height);
         }
+
         requestAnimationFrame(loopDraw);
     }
 
+    // 录制
     document.getElementById('btn-rec').onclick = () => {
         if (!isRecording) {
-            let stream = canvas.captureStream(30); // 锁定 30fps
-            
-            // --- 【修改点2】限制录制码率 ---
-            mediaRecorder = new MediaRecorder(stream, { 
-                mimeType: 'video/webm',
-                // 强制限制为 1 Mbps (1,000,000 bits/s)
-                // 这可以确保1小时视频在 450MB 左右
-                bitsPerSecond: 1000000 
-            });
-            
+            let stream = canvas.captureStream(30);
+            mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm', bitsPerSecond: 1000000 });
             recordedChunks = [];
             csvBuffer = "Time_ms,Ax,Ay,Az,Sensor_Speed,GPS_Speed,Button\n";
             mediaRecorder.ondataavailable = e => { if(e.data.size>0) recordedChunks.push(e.data); };
@@ -187,10 +187,10 @@
         const timeStr = new Date().toISOString().slice(11,19).replace(/:/g,"-");
         const aVid = document.createElement('a');
         aVid.href = URL.createObjectURL(new Blob(recordedChunks, {type:'video/webm'}));
-        aVid.download = `cycle_low_${timeStr}.webm`; aVid.click();
+        aVid.download = `cycle_${timeStr}.webm`; aVid.click();
         const aCsv = document.createElement('a');
         aCsv.href = URL.createObjectURL(new Blob([csvBuffer], {type:'text/csv;charset=utf-8;'}));
-        aCsv.download = `cycle_data_${timeStr}.csv`; aCsv.click();
+        aCsv.download = `cycle_${timeStr}.csv`; aCsv.click();
     }
 </script>
 </body>
