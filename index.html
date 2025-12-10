@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>SmartCycle GPS Calibration</title>
+    <title>SmartCycle Frequency Calib</title>
     <style>
         body { margin: 0; background: #000; overflow: hidden; font-family: 'Courier New', monospace; }
         #canvas-layer { position: absolute; width: 100%; height: 100%; object-fit: cover; }
@@ -18,12 +18,12 @@
     </style>
 </head>
 <body>
-    <div id="debug-log">Debug: 等待蓝牙连接...</div>
+    <div id="debug-log">Debug: 等待数据...</div>
     <video id="video-source" playsinline autoplay muted style="display:none;"></video>
     <canvas id="canvas-layer"></canvas>
 
     <div class="ui-container">
-        <div id="status-text" class="status">正在搜索GPS...</div>
+        <div id="status-text" class="status">GPS初始化...</div>
         <div class="btn-group">
             <button id="btn-connect">📡 连蓝牙</button>
             <button id="btn-cam">📷 开相机</button>
@@ -36,16 +36,16 @@
     const CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 
     let bleDevice, bleServer;
-    // 数据池: 包含 ESP32 的电压 和 手机的 GPS
-    let data = { ax:0, ay:0, az:0, vol:0, btn:0, time:0 }; 
+    // 数据结构更新: freqSpeed (电机测出的) vs gpsSpeed (手机测出的)
+    let data = { ax:0, ay:0, az:0, freqSpeed:0, btn:0, time:0 }; 
     let gpsSpeed = 0.0; 
     let gpsAcc = 0;
 
     let isRecording = false;
     let mediaRecorder;
     let recordedChunks = [];
-    // CSV表头: 时间,加速度X,Y,Z,电机电压,GPS速度,按键标记
-    let csvContent = "Time_ms,Ax,Ay,Az,Voltage_V,GPS_Speed_kmh,Button_Marker\n";
+    // CSV 表头更新: 明确区分 传感器速度 和 GPS速度
+    let csvContent = "Time_ms,Ax,Ay,Az,Sensor_Speed_kmh,GPS_Speed_kmh,Button_Marker\n";
 
     const video = document.getElementById('video-source');
     const canvas = document.getElementById('canvas-layer');
@@ -53,30 +53,21 @@
     const statusDiv = document.getElementById('status-text');
     const debugDiv = document.getElementById('debug-log');
 
-    // --- 0. 启动手机 GPS ---
+    // --- 0. 启动 GPS ---
     if ("geolocation" in navigator) {
         navigator.geolocation.watchPosition((position) => {
             let s = position.coords.speed; 
-            // 手机 GPS 返回的是 m/s，需要转成 km/h
-            // 如果静止时 s 可能是 null，这时候强制为 0
             gpsSpeed = (s === null) ? 0 : s * 3.6; 
             gpsAcc = position.coords.accuracy;
             statusDiv.innerText = `GPS精度: ±${gpsAcc.toFixed(0)}m`;
-        }, (err) => {
-            console.warn("GPS Error:", err);
-            statusDiv.innerText = "⚠️ 无法获取GPS";
-        }, {
-            enableHighAccuracy: true, 
-            maximumAge: 0
-        });
+        }, (err) => { console.warn(err); }, { enableHighAccuracy: true, maximumAge: 0 });
     }
 
     // --- 1. 蓝牙连接 ---
     document.getElementById('btn-connect').onclick = async () => {
         try {
-            statusDiv.innerText = "搜索 SmartCycle_Pro...";
             bleDevice = await navigator.bluetooth.requestDevice({
-                filters: [{ namePrefix: "SmartCycle" }],
+                filters: [{ namePrefix: "SmartCycle" }], // 兼容 Pro 和 Pro_AC
                 optionalServices: [SERVICE_UUID]
             });
             bleDevice.addEventListener('gattserverdisconnected', () => {
@@ -86,33 +77,31 @@
             bleServer = await bleDevice.gatt.connect();
             const service = await bleServer.getPrimaryService(SERVICE_UUID);
             const char = await service.getCharacteristic(CHAR_UUID);
-            
             await char.startNotifications();
             char.addEventListener('characteristicvaluechanged', handleData);
-            
             document.getElementById('btn-connect').style.display = 'none';
-        } catch (e) { alert("蓝牙错误: " + e); }
+        } catch (e) { alert("连接失败: " + e); }
     };
 
-    // --- 2. 数据处理与融合 ---
+    // --- 2. 数据解析 ---
     function handleData(event) {
         const val = new TextDecoder().decode(event.target.value);
-        // 调试窗显示：原始电压 + GPS速度
-        debugDiv.innerText = `ESP: ${val} | GPS: ${gpsSpeed.toFixed(1)} km/h`;
+        // 调试显示
+        debugDiv.innerText = `ESP: ${val} | GPS: ${gpsSpeed.toFixed(1)}`;
         
         const parts = val.split(',');
-        // V5.2 格式: Time, Ax, Ay, Az, Voltage, Button
+        // V6.0 格式: Time, Ax, Ay, Az, FreqSpeed, Button
         if(parts.length >= 6) {
             data.time = parts[0];
             data.ax = parseFloat(parts[1]);
             data.ay = parseFloat(parts[2]);
             data.az = parseFloat(parts[3]);
-            data.vol = parseFloat(parts[4]); // 这里是电压！
+            data.freqSpeed = parseFloat(parts[4]); // 这里是频率算出的速度
             data.btn = parseInt(parts[5]);
 
             if(isRecording) {
-                // 写入一行数据 (融合 ESP32 和 GPS)
-                csvContent += `${data.time},${data.ax},${data.ay},${data.az},${data.vol},${gpsSpeed.toFixed(2)},${data.btn}\n`;
+                // 写入 CSV: 传感器速度在前，GPS在后，方便对比
+                csvContent += `${data.time},${data.ax},${data.ay},${data.az},${data.freqSpeed},${gpsSpeed.toFixed(2)},${data.btn}\n`;
             }
         }
     }
@@ -136,48 +125,50 @@
         }
         ctx.drawImage(video, 0, 0);
 
-        // 黑色半透明底框
+        // 仪表盘背景
         ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-        ctx.fillRect(10, canvas.height - 150, 300, 140);
+        ctx.fillRect(10, canvas.height - 180, 320, 170);
 
-        // 显示 GPS 速度 (大字)
+        // 1. GPS 速度 (参考真值) - 绿色
         ctx.fillStyle = "#0f0";
         ctx.font = "bold 50px Courier New";
-        ctx.fillText(gpsSpeed.toFixed(1), 30, canvas.height - 80);
-        ctx.font = "20px Arial";
+        ctx.fillText(gpsSpeed.toFixed(1), 30, canvas.height - 110);
+        ctx.font = "16px Arial";
         ctx.fillStyle = "#aaa";
-        ctx.fillText("KM/H (GPS)", 160, canvas.height - 80);
+        ctx.fillText("GPS KM/H (真值)", 160, canvas.height - 110);
         
-        // 显示 电机电压 (小字)
-        ctx.font = "20px Arial";
+        // 2. 传感器速度 (待校准) - 青色
+        ctx.fillStyle = "#0ff"; // 青色
+        ctx.font = "bold 40px Courier New";
+        ctx.fillText(data.freqSpeed.toFixed(1), 30, canvas.height - 50);
+        ctx.font = "16px Arial";
+        ctx.fillStyle = "#aaa";
+        ctx.fillText("SENSOR KM/H", 160, canvas.height - 50);
+        
+        // G值
         ctx.fillStyle = "#fff";
-        ctx.fillText(`⚡ ${data.vol.toFixed(2)} V`, 30, canvas.height - 40);
-        
-        // 显示 G值
-        ctx.fillText(`G: ${data.ax.toFixed(2)}`, 160, canvas.height - 40);
+        ctx.fillText(`G: ${data.ax.toFixed(2)}`, 250, canvas.height - 50);
 
-        // 按键标记 (红块)
+        // 按键标记
         if (data.btn === 1) {
-            ctx.fillStyle = "red";
-            ctx.fillRect(canvas.width - 60, 20, 40, 40);
+            ctx.fillStyle = "red"; ctx.fillRect(canvas.width-60, 20, 40, 40);
         }
         requestAnimationFrame(loopDraw);
     }
 
-    // --- 4. 录制与导出 ---
+    // --- 4. 录制逻辑 ---
     document.getElementById('btn-rec').onclick = () => {
         if (!isRecording) {
             let stream = canvas.captureStream(30);
             mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
             recordedChunks = [];
-            csvContent = "Time_ms,Ax,Ay,Az,Voltage_V,GPS_Speed_kmh,Button_Marker\n";
-            
+            // 重置 CSV 表头
+            csvContent = "Time_ms,Ax,Ay,Az,Sensor_Speed_kmh,GPS_Speed_kmh,Button_Marker\n";
             mediaRecorder.ondataavailable = e => { if(e.data.size>0) recordedChunks.push(e.data); };
             mediaRecorder.onstop = saveFiles;
-            
             mediaRecorder.start();
             isRecording = true;
-            document.getElementById('btn-rec').innerText = "⏹ 停止并保存";
+            document.getElementById('btn-rec').innerText = "⏹ 停止";
             document.getElementById('btn-rec').classList.add('recording');
         } else {
             mediaRecorder.stop();
@@ -189,15 +180,12 @@
 
     function saveFiles() {
         const timeStr = new Date().toISOString().slice(11,19).replace(/:/g,"-");
-        // 保存视频
         const aVid = document.createElement('a');
         aVid.href = URL.createObjectURL(new Blob(recordedChunks, {type:'video/webm'}));
-        aVid.download = `cycle_gps_${timeStr}.webm`; aVid.click();
-        // 保存数据
+        aVid.download = `cycle_calib_${timeStr}.webm`; aVid.click();
         const aCsv = document.createElement('a');
         aCsv.href = URL.createObjectURL(new Blob([csvContent], {type:'text/csv;charset=utf-8;'}));
         aCsv.download = `cycle_data_${timeStr}.csv`; aCsv.click();
-        
         alert("下载已触发！");
     }
 </script>
