@@ -3,21 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>SmartCycle Recorder V6.6</title>
+    <title>SmartCycle Dual Data</title>
     <style>
         body { margin: 0; background: #000; overflow: hidden; font-family: 'Courier New', monospace; }
         #canvas-layer { position: absolute; width: 100%; height: 100%; object-fit: cover; }
-        
-        /* 底部按钮区 */
         .ui-container { position: absolute; bottom: 30px; left: 0; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 10px; z-index: 10; pointer-events: none; }
         .btn-group { display: flex; gap: 20px; pointer-events: auto; }
-        
         button { background: rgba(0, 0, 0, 0.6); border: 2px solid #0f0; color: #fff; padding: 15px 30px; font-size: 18px; border-radius: 50px; font-weight: bold; backdrop-filter: blur(5px); }
         button:disabled { border-color: #555; color: #888; }
         button.recording { background: #f00; border-color: #fff; animation: pulse 1s infinite; }
-        
         .status { color: #0f0; font-size: 12px; text-shadow: 1px 1px 2px black; }
-        
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
     </style>
 </head>
@@ -26,7 +21,7 @@
     <canvas id="canvas-layer"></canvas>
 
     <div class="ui-container">
-        <div id="status-text" class="status">等待GPS定位...</div>
+        <div id="status-text" class="status">等待GPS...</div>
         <div class="btn-group">
             <button id="btn-connect">📡 连接</button>
             <button id="btn-cam">📷 相机</button>
@@ -39,13 +34,15 @@
     const CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 
     let bleDevice, bleServer;
-    let latestFrame = { time:0, speed:0, gps:0, btn:0 }; 
+    let latestFrame = { time:0, freq:0, vol:0 }; 
     let gpsSpeed = 0.0; 
     let gpsAcc = 0;
     let isRecording = false;
     let mediaRecorder;
     let recordedChunks = [];
-    let csvBuffer = "Time_ms,Ax,Ay,Az,Sensor_Speed,GPS_Speed,Button\n";
+    
+    // 【新表头】：Time, Ax, Ay, Az, Freq, Voltage, GPS
+    let csvBuffer = "Time_ms,Ax,Ay,Az,Motor_Hz,Voltage_V,GPS_Speed_kmh\n";
 
     const video = document.getElementById('video-source');
     const canvas = document.getElementById('canvas-layer');
@@ -59,7 +56,6 @@
             gpsSpeed = (s === null) ? 0 : s * 3.6; 
             gpsAcc = pos.coords.accuracy;
             statusDiv.innerText = `GPS精度: ±${gpsAcc.toFixed(0)}m`;
-            latestFrame.gps = gpsSpeed;
         }, (err) => { console.warn(err); }, { enableHighAccuracy: true, maximumAge: 0 });
     }
 
@@ -87,24 +83,25 @@
     function handleData(event) {
         const val = new TextDecoder().decode(event.target.value);
         const parts = val.split(',');
+        // V7.1: Time, Ax, Ay, Az, Freq, Voltage
         if(parts.length >= 6) {
             let t = parts[0];
             let ax = parts[1];
             let ay = parts[2];
             let az = parts[3];
-            let spd = parseFloat(parts[4]);
-            let btn = parseInt(parts[5]);
+            let freq = parseFloat(parts[4]);
+            let vol = parseFloat(parts[5]);
 
             if(isRecording) {
-                csvBuffer += `${t},${ax},${ay},${az},${spd},${gpsSpeed.toFixed(2)},${btn}\n`;
+                csvBuffer += `${t},${ax},${ay},${az},${freq},${vol},${gpsSpeed.toFixed(2)}\n`;
             }
             latestFrame.time = t;
-            latestFrame.speed = spd;
-            latestFrame.btn = btn;
+            latestFrame.freq = freq;
+            latestFrame.vol = vol;
         }
     }
 
-    // 相机 (低画质模式)
+    // 相机
     document.getElementById('btn-cam').onclick = async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ 
@@ -118,7 +115,6 @@
         } catch (e) { alert("相机失败: " + e); }
     };
 
-    // --- UI 渲染 (关键修改) ---
     function loopDraw() {
         if (canvas.width !== video.videoWidth) {
             canvas.width = video.videoWidth;
@@ -126,38 +122,31 @@
         }
         ctx.drawImage(video, 0, 0);
 
-        // --- 顶部 HUD 栏 ---
-        // 黑色半透明背景 (顶部)
+        // UI 渲染
         ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-        ctx.fillRect(0, 0, canvas.width, 80);
+        ctx.fillRect(0, 0, canvas.width, 100); // 顶部栏加大
 
-        // 1. 左上角：时间码 (黄色)
+        // 1. 时间码 (左上)
         ctx.textAlign = "left";
         ctx.fillStyle = "yellow";
-        // 字体改小一点，适应手机
         ctx.font = "bold 24px Courier New"; 
         ctx.fillText(`T: ${latestFrame.time}`, 20, 45);
         
-        ctx.fillStyle = "#aaa";
-        ctx.font = "12px Arial";
-        ctx.fillText("SYNC TIME", 20, 65);
+        // 2. 频率 & 电压 (左下显示数据)
+        ctx.fillStyle = "#0ff"; // 青色
+        ctx.font = "bold 20px Arial";
+        ctx.fillText(`${latestFrame.freq.toFixed(0)} Hz`, 20, 80);
+        ctx.fillStyle = "#fff"; 
+        ctx.fillText(`⚡ ${latestFrame.vol.toFixed(2)} V`, 120, 80);
 
-        // 2. 右上角：GPS 速度 (绿色)
+        // 3. GPS 速度 (右上)
         ctx.textAlign = "right";
         ctx.fillStyle = "#0f0";
-        ctx.font = "bold 36px Arial"; 
-        ctx.fillText(gpsSpeed.toFixed(1), canvas.width - 20, 45);
-        
+        ctx.font = "bold 40px Arial"; 
+        ctx.fillText(gpsSpeed.toFixed(1), canvas.width - 20, 50);
         ctx.fillStyle = "#aaa";
         ctx.font = "12px Arial";
-        ctx.fillText("GPS KM/H", canvas.width - 20, 65);
-
-        // 3. 事件标记 (全屏红框闪烁)
-        if (latestFrame.btn === 1) {
-            ctx.lineWidth = 10;
-            ctx.strokeStyle = "rgba(255, 0, 0, 0.8)";
-            ctx.strokeRect(0, 0, canvas.width, canvas.height);
-        }
+        ctx.fillText("GPS KM/H", canvas.width - 20, 70);
 
         requestAnimationFrame(loopDraw);
     }
@@ -168,7 +157,7 @@
             let stream = canvas.captureStream(30);
             mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm', bitsPerSecond: 1000000 });
             recordedChunks = [];
-            csvBuffer = "Time_ms,Ax,Ay,Az,Sensor_Speed,GPS_Speed,Button\n";
+            csvBuffer = "Time_ms,Ax,Ay,Az,Motor_Hz,Voltage_V,GPS_Speed_kmh\n";
             mediaRecorder.ondataavailable = e => { if(e.data.size>0) recordedChunks.push(e.data); };
             mediaRecorder.onstop = saveFiles;
             mediaRecorder.start();
@@ -187,10 +176,10 @@
         const timeStr = new Date().toISOString().slice(11,19).replace(/:/g,"-");
         const aVid = document.createElement('a');
         aVid.href = URL.createObjectURL(new Blob(recordedChunks, {type:'video/webm'}));
-        aVid.download = `cycle_${timeStr}.webm`; aVid.click();
+        aVid.download = `cycle_dual_${timeStr}.webm`; aVid.click();
         const aCsv = document.createElement('a');
         aCsv.href = URL.createObjectURL(new Blob([csvBuffer], {type:'text/csv;charset=utf-8;'}));
-        aCsv.download = `cycle_${timeStr}.csv`; aCsv.click();
+        aCsv.download = `cycle_data_${timeStr}.csv`; aCsv.click();
     }
 </script>
 </body>
