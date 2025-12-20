@@ -1,130 +1,305 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>SmartCycle Remote Control</title>
-    <style>
-        body { margin: 0; background: #000; overflow: hidden; font-family: 'Arial', sans-serif; }
-        #canvas-layer { position: absolute; width: 100%; height: 100%; object-fit: cover; }
-        
-        /* 顶部数据显示区 */
-        .hud-top { position: absolute; top: 0; left: 0; width: 100%; height: 150px; background: rgba(0,0,0,0.6); display: flex; flex-direction: column; justify-content: center; align-items: center; color: white; pointer-events: none; z-index: 5;}
-        .hud-value { font-size: 40px; font-weight: bold; color: #0ff; }
-        .hud-label { font-size: 14px; color: #aaa; }
-        
-        /* 底部控制区 */
-        .control-panel { position: absolute; bottom: 20px; left: 0; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 15px; z-index: 10; }
-        
-        /* 阻力按钮组 */
-        .mode-group { display: flex; gap: 10px; background: rgba(50,50,50,0.8); padding: 10px; border-radius: 20px; }
-        .mode-btn { width: 80px; height: 60px; border: 2px solid #555; background: #333; color: #fff; border-radius: 10px; font-size: 14px; cursor: pointer; }
-        .mode-btn.active { border-color: #0f0; background: #006400; box-shadow: 0 0 10px #0f0; }
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>SmartCycle Mission Control</title>
+  <style>
+    body { margin: 0; background: #000; overflow: hidden; font-family: Arial, sans-serif; }
+    #canvas-layer { position: absolute; width: 100%; height: 100%; object-fit: cover; }
 
-        /* 连接按钮 */
-        #btn-connect { background: rgba(0, 0, 200, 0.8); border: 1px solid #fff; color: #fff; padding: 8px 20px; border-radius: 20px; }
-    </style>
+    .hud-top {
+      position: absolute; top: 0; left: 0; width: 100%;
+      background: rgba(0,0,0,0.6); padding: 10px 0;
+      color: white; display: grid; grid-template-columns: 1fr 1fr;
+      text-align: center; z-index: 5;
+    }
+    .hud-val { font-size: 24px; font-weight: bold; }
+    .hud-lbl { font-size: 10px; color: #aaa; }
+    .hud-gps { color: #0f0; }
+    .hud-pwr { color: #0ff; }
+
+    .control-panel {
+      position: absolute; bottom: 20px; left: 0; width: 100%;
+      display: flex; flex-direction: column; align-items: center; gap: 10px;
+      z-index: 10;
+    }
+
+    .mode-group { display: flex; gap: 10px; background: rgba(50,50,50,0.8); padding: 5px; border-radius: 20px; }
+    .mode-btn { padding: 10px 15px; border: 1px solid #555; background: #222; color: #fff; border-radius: 10px; font-size: 12px; }
+    .mode-btn.active { background: #006400; border-color: #0f0; }
+
+    .main-btn { background: #f00; border: 2px solid #fff; color: #fff; padding: 10px 30px; font-size: 16px; border-radius: 50px; font-weight: bold; }
+    .connect-btn { background: blue; border: none; }
+  </style>
 </head>
 <body>
-    <video id="video-source" playsinline autoplay muted style="display:none;"></video>
-    <canvas id="canvas-layer"></canvas>
+  <video id="video-source" playsinline autoplay muted style="display:none;"></video>
+  <canvas id="canvas-layer"></canvas>
 
-    <!-- 顶部 HUD -->
-    <div class="hud-top">
-        <div id="disp-power" class="hud-value">0.00 W</div>
-        <div class="hud-label">发电功率 (POWER)</div>
-        <div style="height: 10px;"></div>
-        <div id="disp-current" style="font-size: 20px; color: #fff;">0.00 A</div>
-        <div class="hud-label">电流 (CURRENT)</div>
+  <div class="hud-top">
+    <div>
+      <div id="val-gps" class="hud-val hud-gps">0.0</div>
+      <div class="hud-lbl">GPS KM/H</div>
     </div>
+    <div>
+      <div id="val-freq" class="hud-val">0</div>
+      <div class="hud-lbl">MOTOR HZ</div>
+    </div>
+    <div>
+      <div id="val-power" class="hud-val hud-pwr">0.00</div>
+      <div class="hud-lbl">WATTS</div>
+    </div>
+    <div>
+      <div id="val-time" class="hud-val">0</div>
+      <div class="hud-lbl">TIME CODE</div>
+    </div>
+  </div>
 
-    <!-- 底部控制 -->
-    <div class="control-panel">
-        <!-- 阻力控制按钮 -->
-        <div class="mode-group">
-            <button id="mode-0" class="mode-btn active" onclick="setMode('0')">无阻力<br>(OFF)</button>
-            <button id="mode-1" class="mode-btn" onclick="setMode('1')">中阻力<br>(50%)</button>
-            <button id="mode-2" class="mode-btn" onclick="setMode('2')">强阻力<br>(MAX)</button>
-        </div>
-        
-        <button id="btn-connect">📡 连接蓝牙 (SmartCycle)</button>
+  <div class="control-panel">
+    <div class="mode-group">
+      <button id="m0" class="mode-btn active" onclick="setMode('0')">OFF<br>无阻力</button>
+      <button id="m1" class="mode-btn" onclick="setMode('1')">ECO<br>充电</button>
+      <button id="m2" class="mode-btn" onclick="setMode('2')">MAX<br>强阻</button>
     </div>
+    <button id="btn-action" class="main-btn connect-btn">📡 连接蓝牙</button>
+  </div>
 
 <script>
-    const SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-    const CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+  // ====== UUIDs (NUS风格) ======
+  const SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+  const RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"; // Web -> ESP32
+  const TX_UUID      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // ESP32 -> Web
 
-    let bleDevice, bleServer, bleChar;
-    let currentMode = 0;
+  // ====== BLE 状态 ======
+  let bleDevice = null;
+  let bleServer = null;
+  let rxChar = null;
+  let txChar = null;
+  let rxBuffer = ""; // 关键：拼包缓冲（按 \n 切帧）
 
-    // 相机背景
-    const video = document.getElementById('video-source');
-    const canvas = document.getElementById('canvas-layer');
-    const ctx = canvas.getContext('2d');
+  // ====== 数据/录制 ======
+  let gpsSpeed = 0.0;
+  let isRecording = false;
+  let mediaRecorder = null;
+  let recordedChunks = [];
+  let csvLines = [];
 
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }).then(stream => {
-        video.srcObject = stream; video.play(); loopDraw();
+  // ====== UI ======
+  const btnAction = document.getElementById('btn-action');
+
+  function setDisconnectedUI() {
+    rxChar = null;
+    txChar = null;
+    bleServer = null;
+    rxBuffer = "";
+
+    if (isRecording && mediaRecorder && mediaRecorder.state !== "inactive") {
+      // 断连时不强制停止录屏（你也可以选择自动 stop）
+      console.warn("BLE disconnected while recording");
+    }
+
+    btnAction.classList.add('connect-btn');
+    btnAction.innerText = "📡 连接蓝牙";
+  }
+
+  function attachDisconnectHandler() {
+    if (!bleDevice) return;
+    bleDevice.addEventListener('gattserverdisconnected', () => {
+      alert("蓝牙断开");
+      setDisconnectedUI();
     });
+  }
 
-    function loopDraw() {
-        if (canvas.width !== video.videoWidth) { canvas.width = video.videoWidth; canvas.height = video.videoHeight; }
-        ctx.drawImage(video, 0, 0);
-        requestAnimationFrame(loopDraw);
+  // ====== GPS ======
+  if ("geolocation" in navigator) {
+    navigator.geolocation.watchPosition(pos => {
+      const s = pos.coords.speed;
+      gpsSpeed = (s === null) ? 0 : s * 3.6;
+      document.getElementById('val-gps').innerText = gpsSpeed.toFixed(1);
+    }, err => console.warn(err), {
+      enableHighAccuracy: true,
+      maximumAge: 500,
+      timeout: 5000
+    });
+  }
+
+  // ====== 相机渲染 ======
+  const video = document.getElementById('video-source');
+  const canvas = document.getElementById('canvas-layer');
+  const ctx = canvas.getContext('2d');
+
+  navigator.mediaDevices.getUserMedia({
+    video: { facingMode: "environment", width: { ideal: 640 }, height: { ideal: 480 } }
+  }).then(stream => {
+    video.srcObject = stream;
+    video.play();
+    loopDraw();
+  }).catch(err => {
+    alert("相机打开失败: " + err);
+  });
+
+  function loopDraw() {
+    // 固定一套分辨率，避免频繁改canvas尺寸造成抖动
+    if (canvas.width === 0 || canvas.height === 0) {
+      canvas.width = 640;
+      canvas.height = 480;
     }
 
-    // 蓝牙连接
-    document.getElementById('btn-connect').onclick = async () => {
-        try {
-            bleDevice = await navigator.bluetooth.requestDevice({
-                filters: [{ namePrefix: "SmartCycle" }],
-                optionalServices: [SERVICE_UUID]
-            });
-            bleDevice.addEventListener('gattserverdisconnected', () => {
-                document.getElementById('btn-connect').style.display = 'block';
-                alert("蓝牙已断开");
-            });
-            bleServer = await bleDevice.gatt.connect();
-            const service = await bleServer.getPrimaryService(SERVICE_UUID);
-            bleChar = await service.getCharacteristic(CHAR_UUID);
-            
-            // 开启通知 (接收数据)
-            await bleChar.startNotifications();
-            bleChar.addEventListener('characteristicvaluechanged', handleData);
-            
-            document.getElementById('btn-connect').style.display = 'none';
-        } catch (e) { alert("Err: " + e); }
-    };
+    // 把视频画到固定canvas上（缩放）
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    // 发送指令 (控制阻力)
-    window.setMode = async (cmd) => {
-        if (!bleChar) return;
-        try {
-            let encoder = new TextEncoder();
-            await bleChar.writeValue(encoder.encode(cmd));
-            
-            // 更新按钮 UI
-            document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
-            document.getElementById('mode-' + cmd).classList.add('active');
-        } catch(e) { console.log(e); }
-    };
-
-    // 接收数据 (显示功率)
-    function handleData(event) {
-        const val = new TextDecoder().decode(event.target.value);
-        const parts = val.split(',');
-        if(parts.length >= 7) {
-            let power = parseFloat(parts[4]);
-            let current = parseFloat(parts[5]);
-            let mode = parseInt(parts[6]); // ESP32 返回的当前模式确认
-            
-            document.getElementById('disp-power').innerText = power.toFixed(2) + " W";
-            document.getElementById('disp-current').innerText = current.toFixed(2) + " A";
-            
-            // 同步按钮状态 (以防万一)
-            // document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
-            // document.getElementById('mode-' + mode).classList.add('active');
-        }
+    if (isRecording) {
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = "red";
+      ctx.strokeRect(0, 0, canvas.width, canvas.height);
     }
+
+    requestAnimationFrame(loopDraw);
+  }
+
+  // ====== BLE 连接 ======
+  async function connectBle() {
+    // 每次连接都走 requestDevice（Android Chrome 体验最好）
+    // 你也可以改成复用 bleDevice 并尝试 gatt.connect()，但测试机阶段这样最直观
+    try {
+      bleDevice = await navigator.bluetooth.requestDevice({
+        filters: [{ namePrefix: "SmartCycle" }],
+        optionalServices: [SERVICE_UUID]
+      });
+
+      attachDisconnectHandler();
+
+      bleServer = await bleDevice.gatt.connect();
+      const service = await bleServer.getPrimaryService(SERVICE_UUID);
+
+      // 订阅数据
+      txChar = await service.getCharacteristic(TX_UUID);
+      await txChar.startNotifications();
+      txChar.addEventListener('characteristicvaluechanged', handleData);
+
+      // 获取发送通道
+      rxChar = await service.getCharacteristic(RX_UUID);
+
+      btnAction.classList.remove('connect-btn');
+      btnAction.innerText = "⏺ 开始录制";
+      alert("连接成功！");
+    } catch (e) {
+      alert("连接失败: " + e);
+      setDisconnectedUI();
+    }
+  }
+
+  btnAction.onclick = async () => {
+    // 若未连接或已断连，优先连接；否则开始/停止录制
+    if (!bleDevice || !bleDevice.gatt || !bleDevice.gatt.connected) {
+      await connectBle();
+    } else {
+      toggleRecording();
+    }
+  };
+
+  // ====== 数据接收（关键：拼包 + 按行解析） ======
+  function handleData(event) {
+    const chunk = new TextDecoder().decode(event.target.value);
+    rxBuffer += chunk;
+
+    let idx;
+    while ((idx = rxBuffer.indexOf("\n")) >= 0) {
+      const line = rxBuffer.slice(0, idx).trim();
+      rxBuffer = rxBuffer.slice(idx + 1);
+
+      if (!line) continue;
+
+      const p = line.split(",");
+      if (p.length < 8) continue;
+
+      // 转数字（避免字符串污染）
+      const t = Number(p[0]);
+      const freq = Number(p[4]);
+      const w = Number(p[5]);
+
+      document.getElementById('val-freq').innerText = isFinite(freq) ? String(freq) : "-";
+      document.getElementById('val-power').innerText = isFinite(w) ? w.toFixed(2) : "-";
+      document.getElementById('val-time').innerText = isFinite(t) ? String(t) : "-";
+
+      // 录 CSV（数组更稳，不会越录越卡）
+      if (isRecording) {
+        csvLines.push(`${p[0]},${p[1]},${p[2]},${p[3]},${p[4]},${p[5]},${p[6]},${p[7]},${gpsSpeed.toFixed(2)}`);
+      }
+    }
+  }
+
+  // ====== 发送指令 ======
+  window.setMode = async (cmd) => {
+    if (!rxChar) return;
+    try {
+      await rxChar.writeValue(new TextEncoder().encode(cmd));
+      document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('m' + cmd).classList.add('active');
+    } catch (e) {
+      alert("发送失败，可能断连，请重新连接");
+      setDisconnectedUI();
+    }
+  };
+
+  // ====== 录制 ======
+  function resetCsv() {
+    csvLines = ["Time_ms,Ax,Ay,Az,Motor_Hz,Watts,Amps,Mode,GPS_Kmh"];
+  }
+
+  function toggleRecording() {
+    if (!isRecording) {
+      // 录屏：降到20fps + 合理码率，减少对BLE的干扰
+      const stream = canvas.captureStream(20);
+      recordedChunks = [];
+      resetCsv();
+
+      mediaRecorder = new MediaRecorder(stream, {
+        mimeType: 'video/webm',
+        bitsPerSecond: 800000
+      });
+
+      mediaRecorder.ondataavailable = e => { if (e.data && e.data.size > 0) recordedChunks.push(e.data); };
+      mediaRecorder.onstop = saveFiles;
+
+      mediaRecorder.start();
+      isRecording = true;
+      btnAction.innerText = "⏹ 停止并保存";
+    } else {
+      if (mediaRecorder && mediaRecorder.state !== "inactive") {
+        mediaRecorder.stop();
+      } else {
+        // 防御：异常状态也能保存CSV
+        saveFiles();
+      }
+      isRecording = false;
+      btnAction.innerText = "⏺ 开始录制";
+    }
+  }
+
+  function saveFiles() {
+    const timeStr = new Date().toISOString().slice(11, 19).replace(/:/g, "-");
+
+    // Video
+    if (recordedChunks.length > 0) {
+      const aVid = document.createElement('a');
+      aVid.href = URL.createObjectURL(new Blob(recordedChunks, { type: 'video/webm' }));
+      aVid.download = `cycle_${timeStr}.webm`;
+      aVid.click();
+    }
+
+    // CSV
+    if (csvLines.length > 1) {
+      const aCsv = document.createElement('a');
+      const csvBlob = new Blob([csvLines.join("\n") + "\n"], { type: 'text/csv;charset=utf-8;' });
+      aCsv.href = URL.createObjectURL(csvBlob);
+      aCsv.download = `cycle_${timeStr}.csv`;
+      aCsv.click();
+    } else {
+      alert("没有录到CSV数据（可能没连上BLE或未收到帧）");
+    }
+  }
 </script>
 </body>
 </html>
