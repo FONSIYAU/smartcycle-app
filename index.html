@@ -66,17 +66,17 @@
   </div>
 
 <script>
-  // ====== UUIDs (NUS风格) ======
+  // ====== UUIDs ======
   const SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-  const RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"; // Web -> ESP32
-  const TX_UUID      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // ESP32 -> Web
+  // 单通道：TX 同时负责 notify(收) + write(发)
+  const TX_UUID      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 
   // ====== BLE 状态 ======
   let bleDevice = null;
   let bleServer = null;
-  let rxChar = null;
-  let txChar = null;
-  let rxBuffer = ""; // 关键：拼包缓冲（按 \n 切帧）
+  let txChar = null;   // notify 通道
+  let rxChar = null;   // write 通道（= txChar）
+  let rxBuffer = "";   // 拼包缓冲（按 \n 切帧）
 
   // ====== 数据/录制 ======
   let gpsSpeed = 0.0;
@@ -89,15 +89,10 @@
   const btnAction = document.getElementById('btn-action');
 
   function setDisconnectedUI() {
-    rxChar = null;
     txChar = null;
+    rxChar = null;
     bleServer = null;
     rxBuffer = "";
-
-    if (isRecording && mediaRecorder && mediaRecorder.state !== "inactive") {
-      // 断连时不强制停止录屏（你也可以选择自动 stop）
-      console.warn("BLE disconnected while recording");
-    }
 
     btnAction.classList.add('connect-btn');
     btnAction.innerText = "📡 连接蓝牙";
@@ -140,13 +135,11 @@
   });
 
   function loopDraw() {
-    // 固定一套分辨率，避免频繁改canvas尺寸造成抖动
     if (canvas.width === 0 || canvas.height === 0) {
       canvas.width = 640;
       canvas.height = 480;
     }
 
-    // 把视频画到固定canvas上（缩放）
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     if (isRecording) {
@@ -160,8 +153,6 @@
 
   // ====== BLE 连接 ======
   async function connectBle() {
-    // 每次连接都走 requestDevice（Android Chrome 体验最好）
-    // 你也可以改成复用 bleDevice 并尝试 gatt.connect()，但测试机阶段这样最直观
     try {
       bleDevice = await navigator.bluetooth.requestDevice({
         filters: [{ namePrefix: "SmartCycle" }],
@@ -173,13 +164,15 @@
       bleServer = await bleDevice.gatt.connect();
       const service = await bleServer.getPrimaryService(SERVICE_UUID);
 
-      // 订阅数据
+      // 获取 TX（单通道）
       txChar = await service.getCharacteristic(TX_UUID);
+
+      // 订阅 notify
       await txChar.startNotifications();
       txChar.addEventListener('characteristicvaluechanged', handleData);
 
-      // 获取发送通道
-      rxChar = await service.getCharacteristic(RX_UUID);
+      // 写通道 = txChar
+      rxChar = txChar;
 
       btnAction.classList.remove('connect-btn');
       btnAction.innerText = "⏺ 开始录制";
@@ -191,7 +184,6 @@
   }
 
   btnAction.onclick = async () => {
-    // 若未连接或已断连，优先连接；否则开始/停止录制
     if (!bleDevice || !bleDevice.gatt || !bleDevice.gatt.connected) {
       await connectBle();
     } else {
@@ -199,7 +191,7 @@
     }
   };
 
-  // ====== 数据接收（关键：拼包 + 按行解析） ======
+  // ====== 数据接收：拼包 + 按行解析 ======
   function handleData(event) {
     const chunk = new TextDecoder().decode(event.target.value);
     rxBuffer += chunk;
@@ -214,7 +206,6 @@
       const p = line.split(",");
       if (p.length < 8) continue;
 
-      // 转数字（避免字符串污染）
       const t = Number(p[0]);
       const freq = Number(p[4]);
       const w = Number(p[5]);
@@ -223,14 +214,13 @@
       document.getElementById('val-power').innerText = isFinite(w) ? w.toFixed(2) : "-";
       document.getElementById('val-time').innerText = isFinite(t) ? String(t) : "-";
 
-      // 录 CSV（数组更稳，不会越录越卡）
       if (isRecording) {
         csvLines.push(`${p[0]},${p[1]},${p[2]},${p[3]},${p[4]},${p[5]},${p[6]},${p[7]},${gpsSpeed.toFixed(2)}`);
       }
     }
   }
 
-  // ====== 发送指令 ======
+  // ====== 发送指令：写到同一个 TX 特征值 ======
   window.setMode = async (cmd) => {
     if (!rxChar) return;
     try {
@@ -250,7 +240,6 @@
 
   function toggleRecording() {
     if (!isRecording) {
-      // 录屏：降到20fps + 合理码率，减少对BLE的干扰
       const stream = canvas.captureStream(20);
       recordedChunks = [];
       resetCsv();
@@ -270,7 +259,6 @@
       if (mediaRecorder && mediaRecorder.state !== "inactive") {
         mediaRecorder.stop();
       } else {
-        // 防御：异常状态也能保存CSV
         saveFiles();
       }
       isRecording = false;
@@ -281,7 +269,6 @@
   function saveFiles() {
     const timeStr = new Date().toISOString().slice(11, 19).replace(/:/g, "-");
 
-    // Video
     if (recordedChunks.length > 0) {
       const aVid = document.createElement('a');
       aVid.href = URL.createObjectURL(new Blob(recordedChunks, { type: 'video/webm' }));
@@ -289,7 +276,6 @@
       aVid.click();
     }
 
-    // CSV
     if (csvLines.length > 1) {
       const aCsv = document.createElement('a');
       const csvBlob = new Blob([csvLines.join("\n") + "\n"], { type: 'text/csv;charset=utf-8;' });
